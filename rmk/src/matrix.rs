@@ -1,7 +1,7 @@
 use crate::debounce::{DebounceState, DebouncerTrait};
 use defmt::Format;
 use embassy_time::{Instant, Timer};
-use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_hal::digital::{InputPin, OutputPin, PinState};
 #[cfg(feature = "async_matrix")]
 use {
     defmt::info, embassy_futures::select::select_slice, embedded_hal_async::digital::Wait,
@@ -208,5 +208,125 @@ impl<
         // ROW2COL
         #[cfg(not(feature = "col2row"))]
         f(&mut self.key_states[row][col]);
+    }
+}
+
+pub(crate) enum BoardSide {
+    Left,
+    Right,
+}
+
+/// MuxMatrix
+pub(crate) struct MuxMatrix<
+    #[cfg(feature = "async_matrix")] In: Wait + InputPin,
+    #[cfg(not(feature = "async_matrix"))] In: InputPin,
+    Idx: OutputPin,
+    Side: OutputPin,
+    D: DebouncerTrait,
+    const IDX_PIN_NUM: usize,
+    const INPUT_PIN_NUM: usize,
+    const OUTPUTS_PER_SIDE: usize,
+    const TOTAL_OUTPUTS: usize, // **must be OUTPUTS_PER_SIDE * 2**
+> {
+    /// Input pins of the pcb matrix
+    input_pins: [In; INPUT_PIN_NUM],
+    /// Output index pins - will be used to set Multiplexer address
+    idx_pins: [Idx; IDX_PIN_NUM],
+    ///Side select pin, used to enable/disable multiplexer on each side.
+    side_pin: Side,
+    /// Debouncer
+    debouncer: D,
+    /// Key state matrix
+    key_states: [[KeyState; INPUT_PIN_NUM]; TOTAL_OUTPUTS],
+    /// Start scanning
+    scan_start: Option<Instant>,
+}
+
+impl<
+        // #[cfg(feature = "async_matrix")] In: Wait + InputPin, // Not sure if we need to support this yet
+        In: InputPin,
+        Idx: OutputPin,
+        Side: OutputPin,
+        D: DebouncerTrait,
+        const IDX_PIN_NUM: usize,
+        const INPUT_PIN_NUM: usize,
+        const OUTPUTS_PER_SIDE: usize,
+        const TOTAL_OUTPUTS: usize,
+    > MuxMatrix<In, Idx, Side, D, IDX_PIN_NUM, INPUT_PIN_NUM, OUTPUTS_PER_SIDE, TOTAL_OUTPUTS>
+{
+    pub fn set_side(&mut self, side: BoardSide) {
+        match side {
+            BoardSide::Left => self.side_pin.set_low().unwrap(),
+            BoardSide::Right => self.side_pin.set_high().unwrap(),
+        }
+    }
+
+    pub fn set_index(&mut self, idx: usize) {
+        assert!(idx < OUTPUTS_PER_SIDE);
+        for i in 0usize..IDX_PIN_NUM {
+            let idx_bit = (idx & (1 >> i)) != 0;
+            self.idx_pins[i].set_state(PinState::from(idx_bit)).unwrap();
+        }
+    }
+
+    pub async fn set_output(&mut self, output: usize) {
+        let (side, idx) = if output < OUTPUTS_PER_SIDE {
+            (BoardSide::Left, output)
+        } else {
+            (BoardSide::Right, output - OUTPUTS_PER_SIDE)
+        };
+        self.set_side(side);
+        self.set_index(idx);
+        Timer::after_micros(1).await; // TODO: check timing requirements
+    }
+}
+
+impl<
+        // #[cfg(feature = "async_matrix")] In: Wait + InputPin, // Not sure if we need to support this yet
+        In: InputPin,
+        Idx: OutputPin,
+        Side: OutputPin,
+        D: DebouncerTrait,
+        const IDX_PIN_NUM: usize,
+        const INPUT_PIN_NUM: usize,
+        const OUTPUTS_PER_SIDE: usize,
+        const TOTAL_OUTPUTS: usize,
+    > MatrixTrait
+    for MuxMatrix<In, Idx, Side, D, IDX_PIN_NUM, INPUT_PIN_NUM, OUTPUTS_PER_SIDE, TOTAL_OUTPUTS>
+{
+    async fn scan(&mut self) {
+        for out_idx in 0..(2 * OUTPUTS_PER_SIDE) {
+            self.set_output(out_idx).await;
+            for (in_idx, in_pin) in self.input_pins.iter_mut().enumerate() {
+                // Check input pins and debounce
+                let debounce_state = self.debouncer.detect_change_with_debounce(
+                    in_idx,
+                    out_idx,
+                    in_pin.is_high().ok().unwrap_or_default(),
+                    &self.key_states[out_idx][in_idx],
+                );
+
+                match debounce_state {
+                    DebounceState::Debounced => {
+                        self.key_states[out_idx][in_idx].toggle_pressed();
+                        self.key_states[out_idx][in_idx].changed = true;
+                    }
+                    _ => self.key_states[out_idx][in_idx].changed = false,
+                }
+            }
+        }
+    }
+
+    fn get_key_state(&mut self, row: usize, col: usize) -> KeyState {
+        self.key_states[col][row]
+    }
+
+    fn update_key_state(&mut self, row: usize, col: usize, f: impl FnOnce(&mut KeyState)) {
+        f(&mut self.key_states[col][row]);
+    }
+
+    #[cfg(feature = "async_matrix")]
+    async fn wait_for_key(&mut self) {
+        todo!()
     }
 }
