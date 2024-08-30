@@ -39,7 +39,7 @@ use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
 use futures::pin_mut;
 use keyboard::{communication_task, Keyboard, KeyboardReportMessage};
 use keymap::KeyMap;
-use matrix::{Matrix, MatrixTrait};
+use matrix::{Matrix, MatrixTrait, MuxMatrix};
 pub use rmk_config as config;
 use rmk_config::RmkConfig;
 pub use rmk_macro as macros;
@@ -168,8 +168,6 @@ pub async fn initialize_keyboard_and_run_async_flash<
     let matrix = Matrix::<_, _, DefaultDebouncer<ROW, COL>, ROW, COL>::new(input_pins, output_pins);
     #[cfg(all(not(feature = "col2row"), feature = "rapid_debouncer"))]
     let matrix = Matrix::<_, _, RapidDebouncer<COL, ROW>, COL, ROW>::new(input_pins, output_pins);
-    #[cfg(all(not(feature = "col2row"), not(feature = "rapid_debouncer")))]
-    let matrix = Matrix::<_, _, DefaultDebouncer<COL, ROW>, COL, ROW>::new(input_pins, output_pins);
 
     let (mut keyboard, mut usb_device, mut vial_service, mut light_service) = (
         Keyboard::new(matrix, &keymap),
@@ -295,4 +293,122 @@ pub(crate) fn reboot_keyboard() {
     // TODO: Implement reboot for other platforms
     // - RISCV
     // - ESP32
+}
+
+pub async fn mux_initialize_keyboard_and_run_async_flash<
+    F: AsyncNorFlash,
+    D: Driver<'static>,
+    In: InputPin,
+    Out: OutputPin,
+    const NUM_LAYER: usize,
+    const IDX_PIN_NUM: usize,
+    const INPUT_PIN_NUM: usize,
+    const OUTPUTS_PER_SIDE: usize,
+    const TOTAL_OUTPUTS: usize,
+>(
+    driver: D,
+    input_pins: [In; INPUT_PIN_NUM],
+    output_pins: [Out; IDX_PIN_NUM], // We don't output directly to columns so outputs to IDX pins
+    flash: Option<F>,
+    default_keymap: [[[KeyAction; TOTAL_OUTPUTS]; INPUT_PIN_NUM]; NUM_LAYER],
+    keyboard_config: RmkConfig<'static, Out>,
+    side_pin: Out,
+) -> ! {
+    // Initialize storage and keymap
+    let (mut storage, keymap) = match flash {
+        Some(f) => {
+            let mut s = Storage::new(f, &default_keymap, keyboard_config.storage_config).await;
+            let keymap = RefCell::new(
+                KeyMap::<INPUT_PIN_NUM, TOTAL_OUTPUTS, NUM_LAYER>::new_from_storage(
+                    default_keymap,
+                    Some(&mut s),
+                )
+                .await,
+            );
+            (Some(s), keymap)
+        }
+        None => {
+            let keymap = RefCell::new(
+                KeyMap::<INPUT_PIN_NUM, TOTAL_OUTPUTS, NUM_LAYER>::new_from_storage::<F>(
+                    default_keymap,
+                    None,
+                )
+                .await,
+            );
+            (None, keymap)
+        }
+    };
+
+    static keyboard_channel: Channel<CriticalSectionRawMutex, KeyboardReportMessage, 8> =
+        Channel::new();
+    let mut keyboard_report_sender = keyboard_channel.sender();
+    let mut keyboard_report_receiver = keyboard_channel.receiver();
+
+    let matrix = MuxMatrix::<
+        _,
+        _,
+        _,
+        RapidDebouncer<INPUT_PIN_NUM, TOTAL_OUTPUTS>,
+        IDX_PIN_NUM,
+        INPUT_PIN_NUM,
+        OUTPUTS_PER_SIDE,
+        TOTAL_OUTPUTS,
+    >::new(input_pins, output_pins, side_pin);
+
+    let (mut keyboard, mut usb_device, mut vial_service, mut light_service) = (
+        Keyboard::new(matrix, &keymap),
+        KeyboardUsbDevice::new(driver, keyboard_config.usb_config),
+        VialService::new(&keymap, keyboard_config.vial_config),
+        LightService::from_config(keyboard_config.light_config),
+    );
+
+    loop {
+        // Run all tasks, if one of them fails, wait 1 second and then restart
+        if let Some(ref mut s) = storage {
+            run_usb_keyboard(
+                &mut usb_device,
+                &mut keyboard,
+                s,
+                &mut light_service,
+                &mut vial_service,
+                &mut keyboard_report_receiver,
+                &mut keyboard_report_sender,
+            )
+            .await;
+        } else {
+            // Run 5 tasks: usb, keyboard, led, vial, communication
+            let usb_fut = usb_device.device.run();
+            let keyboard_fut = keyboard_task(&mut keyboard, &mut keyboard_report_sender);
+            let communication_fut = communication_task(
+                &mut keyboard_report_receiver,
+                &mut usb_device.keyboard_hid_writer,
+                &mut usb_device.other_hid_writer,
+            );
+            let led_fut = led_hid_task(&mut usb_device.keyboard_hid_reader, &mut light_service);
+            let via_fut = vial_task(&mut usb_device.via_hid, &mut vial_service);
+            pin_mut!(usb_fut);
+            pin_mut!(keyboard_fut);
+            pin_mut!(led_fut);
+            pin_mut!(via_fut);
+            pin_mut!(communication_fut);
+            match select4(
+                usb_fut,
+                select(keyboard_fut, communication_fut),
+                led_fut,
+                via_fut,
+            )
+            .await
+            {
+                Either4::First(_) => {
+                    error!("Usb task is died");
+                }
+                Either4::Second(_) => error!("Keyboard task is died"),
+                Either4::Third(_) => error!("Led task is died"),
+                Either4::Fourth(_) => error!("Via task is died"),
+            }
+        }
+
+        warn!("Detected failure, restarting keyboard sevice after 1 second");
+        Timer::after_secs(1).await;
+    }
 }

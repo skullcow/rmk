@@ -15,7 +15,7 @@ rmk-config = { version = "0.1.4", path = "../rmk-config" }
 rmk-macro = { version = "0.1.8", path = "../rmk-macro" }
 embedded-hal = { version = "1.0.0", features = ["defmt-03"] }
 embedded-hal-async = { version = "1.0.0", features = [
-    "defmt-03",
+  "defmt-03",
 ], optional = true }
 embedded-io-async = { version = "0.6", features = ["defmt-03"] }
 embedded-storage = "0.3"
@@ -23,10 +23,10 @@ embedded-storage-async = "0.4"
 embassy-embedded-hal = { version = "0.2" }
 embassy-time = { version = "0.3", features = ["defmt"] }
 embassy-usb = { version = "0.3", features = [
-    "defmt",
-    "usbd-hid",
-    "max-interface-count-8",
-    "max-handler-count-8",
+  "defmt",
+  "usbd-hid",
+  "max-interface-count-8",
+  "max-handler-count-8",
 ] }
 heapless = "0.8.0"
 embassy-sync = { version = "0.6", features = ["defmt"] }
@@ -49,19 +49,19 @@ postcard = { version = "1", features = ["experimental-derive", "use-defmt"] }
 # Optional dependencies
 # nRF dependencies
 once_cell = { version = "1.19", features = [
-    "atomic-polyfill",
+  "atomic-polyfill",
 ], default-features = false, optional = true }
 nrf-softdevice = { version = "0.1.0", git = "https://github.com/embassy-rs/nrf-softdevice", rev = "d5f023b", features = [
-    "defmt",
-    "ble-peripheral",
-    "critical-section-impl",
-    "ble-gatt-server",
-    "ble-sec",
+  "defmt",
+  "ble-peripheral",
+  "critical-section-impl",
+  "ble-gatt-server",
+  "ble-sec",
 ], optional = true }
 embassy-nrf = { version = "0.2.0", features = [
-    "defmt",
-    "unstable-pac",
-    "time",
+  "defmt",
+  "unstable-pac",
+  "time",
 ], optional = true }
 
 # Espressif dependencies
@@ -76,7 +76,7 @@ document-features = "0.2"
 cortex-m = { version = "0.7" }
 
 [features]
-default = ["col2row", "rapid_debouncer"]
+default = ["col2row", "rapid_debouncer", "mux"]
 ## If your PCB diode's direction is col2row, enable this feature. If it's row2col, disable this feature.
 col2row = []
 
@@ -85,6 +85,9 @@ async_matrix = ["dep:embedded-hal-async"]
 
 ## Use rapid debouncer
 rapid_debouncer = []
+
+## Use multiplexer keyboard
+mux = []
 
 #! ### BLE feature flags
 #! 
@@ -105,17 +108,17 @@ esp32c3_ble = ["_esp_ble"]
 ## Enable feature if you want to use ESP32S3 with BLE.
 esp32s3_ble = ["_esp_ble"]
 _esp_ble = [
-    "_ble",
-    "rmk-config/_esp_ble",
-    "ssmarshal/std",
-    "dep:esp32-nimble",
-    "dep:esp-idf-svc",
+  "_ble",
+  "rmk-config/_esp_ble",
+  "ssmarshal/std",
+  "dep:esp32-nimble",
+  "dep:esp-idf-svc",
 ]
 _nrf_ble = [
-    "_ble",
-    "rmk-config/_nrf_ble",
-    "dep:nrf-softdevice",
-    "dep:embassy-nrf",
-    "dep:once_cell",
+  "_ble",
+  "rmk-config/_nrf_ble",
+  "dep:nrf-softdevice",
+  "dep:embassy-nrf",
+  "dep:once_cell",
 ]
 _ble = []

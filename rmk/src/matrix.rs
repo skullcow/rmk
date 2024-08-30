@@ -218,8 +218,7 @@ pub(crate) enum BoardSide {
 
 /// MuxMatrix
 pub(crate) struct MuxMatrix<
-    #[cfg(feature = "async_matrix")] In: Wait + InputPin,
-    #[cfg(not(feature = "async_matrix"))] In: InputPin,
+    In: InputPin,
     Idx: OutputPin,
     Side: OutputPin,
     D: DebouncerTrait,
@@ -254,6 +253,22 @@ impl<
         const TOTAL_OUTPUTS: usize,
     > MuxMatrix<In, Idx, Side, D, IDX_PIN_NUM, INPUT_PIN_NUM, OUTPUTS_PER_SIDE, TOTAL_OUTPUTS>
 {
+    /// Create a matrix from input and output pins.
+    pub(crate) fn new(
+        input_pins: [In; INPUT_PIN_NUM],
+        idx_pins: [Idx; IDX_PIN_NUM],
+        side_pin: Side,
+    ) -> Self {
+        MuxMatrix {
+            input_pins,
+            idx_pins,
+            side_pin,
+            debouncer: D::new(),
+            key_states: [[KeyState::new(); INPUT_PIN_NUM]; TOTAL_OUTPUTS],
+            scan_start: None,
+        }
+    }
+
     pub fn set_side(&mut self, side: BoardSide) {
         match side {
             BoardSide::Left => self.side_pin.set_low().unwrap(),
