@@ -386,15 +386,25 @@ pub async fn mux_initialize_keyboard_and_run_async_flash<
             );
             let led_fut = led_hid_task(&mut usb_device.keyboard_hid_reader, &mut light_service);
             let via_fut = vial_task(&mut usb_device.via_hid, &mut vial_service);
+
             pin_mut!(usb_fut);
             pin_mut!(keyboard_fut);
             pin_mut!(led_fut);
             pin_mut!(via_fut);
             pin_mut!(communication_fut);
+
+            #[cfg(feature = "usb_log")]
+            let log_fut = usb_device.logger.run();
+            #[cfg(feature = "usb_log")]
+            pin_mut!(log_fut);
+
             match select4(
                 usb_fut,
                 select(keyboard_fut, communication_fut),
+                #[cfg(not(feature = "usb_log"))]
                 led_fut,
+                #[cfg(feature = "usb_log")]
+                select(led_fut, log_fut),
                 via_fut,
             )
             .await

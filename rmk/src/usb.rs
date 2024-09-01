@@ -4,11 +4,15 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use defmt::info;
 use embassy_time::Timer;
 use embassy_usb::{
-    class::hid::{Config, HidReaderWriter, HidWriter, ReportId, RequestHandler, State},
+    class::{
+        cdc_acm::{CdcAcmClass, State as CdmAcmState},
+        hid::{Config, HidReaderWriter, HidWriter, ReportId, RequestHandler, State},
+    },
     control::OutResponse,
     driver::Driver,
     Builder, Handler, UsbDevice,
 };
+use embassy_usb_logger::UsbLogger;
 use rmk_config::KeyboardUsbConfig;
 use static_cell::StaticCell;
 use usbd_hid::descriptor::{KeyboardReport, SerializedDescriptor};
@@ -45,6 +49,24 @@ pub(crate) async fn wait_for_usb_configured() {
     }
 }
 
+#[cfg(feature = "usb_log")]
+pub(crate) struct Logger<'d, D: Driver<'d>> {
+    pub class: Option<CdcAcmClass<'d, D>>,
+}
+
+#[cfg(feature = "usb_log")]
+impl<'d, D: Driver<'d>> Logger<'d, D> {
+    pub async fn run(&mut self) {
+        static LOGGER: UsbLogger<1024> = UsbLogger::new();
+        unsafe {
+            let _ = ::log::set_logger_racy(&LOGGER)
+                .map(|()| log::set_max_level_racy(log::LevelFilter::Info));
+        }
+        LOGGER
+            .create_future_from_class(self.class.take().unwrap())
+            .await // don't call this more than once
+    }
+}
 // In this case, report id should be used.
 // The keyboard usb device should have 3 hid instances:
 // 1. Boot keyboard: 1 endpoint in
@@ -56,6 +78,8 @@ pub(crate) struct KeyboardUsbDevice<'d, D: Driver<'d>> {
     pub(crate) keyboard_hid_reader: UsbHidReader<'d, D, 1>,
     pub(crate) other_hid_writer: UsbHidWriter<'d, D, 9>,
     pub(crate) via_hid: UsbHidReaderWriter<'d, D, 32, 32>,
+    #[cfg(feature = "usb_log")]
+    pub(crate) logger: Logger<'d, D>,
 }
 
 impl<D: Driver<'static>> KeyboardUsbDevice<'static, D> {
@@ -136,15 +160,31 @@ impl<D: Driver<'static>> KeyboardUsbDevice<'static, D> {
         let via_hid: HidReaderWriter<'_, D, 32, 32> =
             HidReaderWriter::new(&mut builder, VIA_STATE.init(State::new()), via_config);
 
+        #[cfg(feature = "usb_log")]
+        let logger = {
+            const MAX_PACKET_SIZE: usize = 64;
+            static LOGGER_STATE: StaticCell<CdmAcmState> = StaticCell::new();
+            let class = CdcAcmClass::new(
+                &mut builder,
+                LOGGER_STATE.init(CdmAcmState::new()),
+                MAX_PACKET_SIZE as u16,
+            );
+            Logger { class: Some(class) }
+        };
+
         // Build usb device
         let usb = builder.build();
         let (reader, writer) = keyboard_hid.split();
+
         Self {
             device: usb,
             keyboard_hid_reader: UsbHidReader::new(reader),
             keyboard_hid_writer: UsbHidWriter::new(writer),
             other_hid_writer: UsbHidWriter::new(other_hid),
             via_hid: UsbHidReaderWriter::new(via_hid),
+
+            #[cfg(feature = "usb_log")]
+            logger,
         }
     }
 }

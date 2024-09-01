@@ -22,12 +22,16 @@ embedded-storage = "0.3"
 embedded-storage-async = "0.4"
 embassy-embedded-hal = { version = "0.2" }
 embassy-time = { version = "0.3", features = ["defmt"] }
-embassy-usb = { version = "0.3", features = [
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", version = "0.3", features = [
   "defmt",
   "usbd-hid",
   "max-interface-count-8",
   "max-handler-count-8",
 ] }
+
+embassy-usb-logger = { git = "https://github.com/embassy-rs/embassy", optional = true }
+log = { version = "0.4", optional = true }
+
 heapless = "0.8.0"
 embassy-sync = { version = "0.6", features = ["defmt"] }
 embassy-futures = { version = "0.1", features = ["defmt"] }
@@ -76,8 +80,12 @@ document-features = "0.2"
 cortex-m = { version = "0.7" }
 
 [features]
-default = ["col2row", "rapid_debouncer", "mux"]
-## If your PCB diode's direction is col2row, enable this feature. If it's row2col, disable this feature.
+default = [
+  "col2row",
+  "rapid_debouncer",
+  "mux",
+  "usb_log",
+] ## If your PCB diode's direction is col2row, enable this feature. If it's row2col, disable this feature.
 col2row = []
 
 ## Enable async matrix scan
@@ -88,6 +96,9 @@ rapid_debouncer = []
 
 ## Use multiplexer keyboard
 mux = []
+
+## write logs to usb,  hopefully ;)
+usb_log = ["dep:embassy-usb-logger", "dep:log"]
 
 #! ### BLE feature flags
 #! 
